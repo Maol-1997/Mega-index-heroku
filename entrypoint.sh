@@ -14,17 +14,26 @@ chmod +x /home/$RCR
 
 # Función para manejar solicitudes
 handle_request() {
-  local request_file=$1
-  local response_file=$2
+  local request=$1
 
   # Obtener la URL de Mega desde la solicitud HTTP
-  MEGA_URL=$(grep "megaurl=" "$request_file" | cut -d'=' -f2 | tr -d '\r')
+  MEGA_URL=$(echo "$request" | grep "GET /" | sed -n 's/.*megaurl=\([^ ]*\).*/\1/p' | tr -d '\r')
+
+  if [ -z "$MEGA_URL" ]; then
+    echo -ne "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
+    return
+  fi
 
   # Crear el enlace directo usando rclone
   DIRECT_URL=$(/home/$RCR link "CLOUDNAME:${MEGA_URL}")
 
+  if [ -z "$DIRECT_URL" ]; then
+    echo -ne "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
+    return
+  fi
+
   # Enviar la respuesta HTTP con el enlace directo
-  echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(echo -n "$DIRECT_URL" | wc -c)\r\n\r\n$DIRECT_URL" > "$response_file"
+  echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(echo -n "$DIRECT_URL" | wc -c)\r\n\r\n$DIRECT_URL"
 }
 
 # Iniciar el servicio de rclone con manejo de cuota automática si está habilitado
@@ -44,19 +53,10 @@ start_rclone_service() {
 # Iniciar el servicio rclone con manejo de cuota automática en segundo plano
 start_rclone_service &
 
-# Esperar y manejar conexiones HTTP
 while :
 do
-  # Crear archivos temporales para la solicitud y la respuesta
-  request_file=$(mktemp)
-  response_file=$(mktemp)
-
-  # Esperar conexión HTTP
-  { echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(wc -c <"$response_file")\r\n\r\n"; cat "$response_file"; } | nc -l -p "$PORT" -q 1 > "$request_file"
-
-  # Manejar la solicitud
-  handle_request "$request_file" "$response_file"
-
-  # Limpiar archivos temporales
-  rm "$request_file" "$response_file"
+  # Usar socat para manejar conexiones HTTP
+  request=$(socat - TCP-LISTEN:$PORT,crlf,reuseaddr,fork 2>/dev/null | head -n 1)
+  response=$(handle_request "$request")
+  echo "$response" | socat - TCP-LISTEN:$PORT,crlf,reuseaddr,fork 2>/dev/null
 done
