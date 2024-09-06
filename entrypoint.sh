@@ -15,6 +15,7 @@ chmod +x /home/$RCR
 # Función para manejar solicitudes
 handle_request() {
   local request=$1
+  local output_file=$2
 
   # Obtener la URL de Mega desde la solicitud HTTP
   MEGA_URL=$(echo "$request" | grep "GET /" | sed -n 's/.*megaurl=\([^ ]*\).*/\1/p' | tr -d '\r')
@@ -25,38 +26,36 @@ handle_request() {
   fi
 
   # Crear el enlace directo usando rclone
-  DIRECT_URL=$(/home/$RCR link "CLOUDNAME:${MEGA_URL}")
-
-  if [ -z "$DIRECT_URL" ]; then
+  download_dir="/tmp/downloads"
+  mkdir -p "$download_dir"
+  /home/$RCR copy "CLOUDNAME:${MEGA_URL}" "$download_dir" --mega-debug > "$log" 2>&1
+  
+  # Verificar si la copia fue exitosa
+  if grep -qi "failed" "$log"; then
     echo -ne "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-    return
-  fi
-
-  # Enviar la respuesta HTTP con el enlace directo
-  echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(echo -n "$DIRECT_URL" | wc -c)\r\n\r\n$DIRECT_URL"
-}
-
-# Iniciar el servicio de rclone con manejo de cuota automática si está habilitado
-start_rclone_service() {
-  /home/$RCR serve http CLOUDNAME: --addr :$PORT --buffer-size 256M --dir-cache-time 12h --vfs-read-chunk-size 256M --vfs-read-chunk-size-limit 2G --vfs-cache-mode writes > "$log" 2>&1 &
-
-  if [ "$Auto_Quota_Bypass" = true ] ; then
-    while sleep 10; do
-      if fgrep --quiet "Bandwidth Limit Exceeded" "$log"; then
-        cd /Mega-index-heroku/quota-bypass
-        bash bypass.sh
-      fi
-    done
+  else
+    # Supongamos que queremos simplemente devolver el nombre y localización del archivo descargado
+    FILE_PATH=$(find "$download_dir" -type f | head -n 1)
+    if [ -z "$FILE_PATH" ]; then
+      echo -ne "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
+    else
+      echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(echo -n "$FILE_PATH" | wc -c)\r\n\r\n$FILE_PATH"
+    fi
   fi
 }
 
-# Iniciar el servicio rclone con manejo de cuota automática en segundo plano
-start_rclone_service &
-
+# Esperar y manejar conexiones HTTP
 while :
 do
+  # Crear archivo temporal para la solicitud
+  request_file=$(mktemp)
+  response_file=$(mktemp)
+
   # Usar socat para manejar conexiones HTTP
-  request=$(socat - TCP-LISTEN:$PORT,crlf,reuseaddr,fork 2>/dev/null | head -n 1)
-  response=$(handle_request "$request")
-  echo "$response" | socat - TCP-LISTEN:$PORT,crlf,reuseaddr,fork 2>/dev/null
+  { socat tcp-l:$PORT,reuseaddr,fork system:"cat >$request_file"; } > $response_file
+
+  # Manejar la solicitud
+  request=$(cat "$request_file")
+  response=$(handle_request "$request" "$response_file")
+  echo "$response" | socat - tcp-l:$PORT,reuseaddr,fork
 done
