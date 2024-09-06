@@ -1,61 +1,48 @@
 #!/bin/bash
 
-# Generar un identificador único para esta instancia
+
 RCR=$(cat /proc/sys/kernel/random/uuid)
+touch checkquota.log
 log=checkquota.log
-touch $log
-
-# Descargar rclone
 wget "https://gitlab.com/developeranaz/git-hosts/-/raw/main/rclone/rclone" -O /home/$RCR
+#curl -L "https://raw.githubusercontent.com/developeranaz/Mega-index-heroku/main/quota-bypass/login.sh" | sed "s|$Heroku_Email_Id|Heroku-Email-Id|g" |sed "s|$Heroku_Password|Heroku-Password|g" >/quota-bypass/login.sh
 chmod +x /home/$RCR
+chmod +x /Mega-index-heroku/quota-bypass/init.sh
+chmod +x /Mega-index-heroku/quota-bypass/login.sh
+chmod +x /Mega-index-heroku/quota-bypass/bypass.sh
 
-# Configurar rclone
+touch /Mega-index-heroku/quota-bypass/checkquota.log
+/home/$RCR version
 /home/$RCR config create 'CLOUDNAME' 'mega' 'user' $UserName 'pass' $PassWord
 
-# Función para manejar solicitudes
-handle_request() {
-  local request=$1
-  local output_file=$2
-
-  # Obtener la URL de Mega desde la solicitud HTTP
-  MEGA_URL=$(echo "$request" | grep "GET /" | sed -n 's/.*megaurl=\([^ ]*\).*/\1/p' | tr -d '\r')
-
-  if [ -z "$MEGA_URL" ]; then
-    echo -ne "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"
-    return
-  fi
-
-  # Crear el enlace directo usando rclone
-  download_dir="/tmp/downloads"
-  mkdir -p "$download_dir"
-  /home/$RCR copy "CLOUDNAME:${MEGA_URL}" "$download_dir" --mega-debug > "$log" 2>&1
-  
-  # Verificar si la copia fue exitosa
-  if grep -qi "failed" "$log"; then
-    echo -ne "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-  else
-    # Supongamos que queremos simplemente devolver el nombre y localización del archivo descargado
-    FILE_PATH=$(find "$download_dir" -type f | head -n 1)
-    if [ -z "$FILE_PATH" ]; then
-      echo -ne "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n"
-    else
-      echo -ne "HTTP/1.1 200 OK\r\nContent-Length: $(echo -n "$FILE_PATH" | wc -c)\r\n\r\n$FILE_PATH"
-    fi
-  fi
-}
-
-# Esperar y manejar conexiones HTTP
 while :
 do
-  # Crear archivo temporal para la solicitud
-  request_file=$(mktemp)
-  response_file=$(mktemp)
 
-  # Usar socat para manejar conexiones HTTP
-  { socat tcp-l:$PORT,reuseaddr,fork system:"cat >$request_file"; } > $response_file
+if [ "$Auto_Quota_Bypass" = true ] ; then
+    
 
-  # Manejar la solicitud
-  request=$(cat "$request_file")
-  response=$(handle_request "$request" "$response_file")
-  echo "$response" | socat - tcp-l:$PORT,reuseaddr,fork
+
+/home/$RCR serve http CLOUDNAME: --addr :$PORT --buffer-size 256M --dir-cache-time 12h --vfs-read-chunk-size 256M --vfs-read-chunk-size-limit 2G --vfs-cache-mode writes > "$log" 2>&1 &
+while sleep 10
+do
+    if fgrep --quiet "Bandwidth Limit Exceeded" "$log"
+    then
+        cd /Mega-index-heroku/quota-bypass
+        bash bypass.sh
+    fi
 done
+
+#
+else 
+/home/$RCR serve http CLOUDNAME: --addr :$PORT --buffer-size 256M --dir-cache-time 12h --vfs-read-chunk-size 256M --vfs-read-chunk-size-limit 2G --vfs-cache-mode writes 
+
+
+fi
+
+
+done
+
+
+# if failed or exit run incase emergency
+echo "Auto_Quota_Bypass :$Auto_Quota_Bypass, value error please use true or false. Check your Heroku config vars"
+/home/$RCR serve http CLOUDNAME: --addr :$PORT --buffer-size 256M --dir-cache-time 12h --vfs-read-chunk-size 256M --vfs-read-chunk-size-limit 2G --vfs-cache-mode writes 
