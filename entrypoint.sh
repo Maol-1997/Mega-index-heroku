@@ -21,9 +21,6 @@ touch /Mega-index-heroku/quota-bypass/checkquota.log
 # Configurar rclone
 /home/$RCR config create 'CLOUDNAME' 'mega' 'user' $UserName 'pass' $PassWord
 
-# Ejecutar un simple servidor HTTP
-PORT=8080
-
 while :
 do
   # Esperar conexión HTTP
